@@ -50,28 +50,28 @@ UObject* UPAGTextureFactory::FactoryCreateBinary(UClass* Class, UObject* InParen
 	//FTextureReferenceReplacer RefReplacer(ExistingTexture);
 
 	// call parent method to create/overwrite anim texture object
-	UPAGTexture2D* AnimTexture = Cast<UPAGTexture2D>(
+	UPAGTexture2D* PAGTexture = Cast<UPAGTexture2D>(
 		CreateOrOverwriteAsset(Class, InParent, Name, Flags)
 		);
-	if (AnimTexture == nullptr) {
-		UE_LOG(LogPAGTexture, Error, TEXT("Create Animated Texture FAILED, Name=%s."), *(Name.ToString()));
+	if (PAGTexture == nullptr) {
+		UE_LOG(LogPAGTexture, Error, TEXT("Create PAG Texture FAILED, Name=%s."), *(Name.ToString()));
 		return nullptr;
 	}
 
-	if (!AnimTexture->ImportPAG(Buffer, BufferEnd - Buffer))
+	if (!PAGTexture->ImportPAG(Buffer, BufferEnd - Buffer))
 	{
 		UE_LOG(LogPAGTexture, Error, TEXT("Import PAG FAILED, Name=%s."), *(Name.ToString()));
-		AnimTexture->Reset();
+		PAGTexture->Reset();
 	}
 	else
 	{
-		AnimTexture->UpdateResource();
+		PAGTexture->UpdateResource();
 	}
 	
 	GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPreImport(this, Class, InParent, Name, Type);
 	
 	// Invalidate any materials using the newly imported texture. (occurs if you import over an existing texture)
-	AnimTexture->PostEditChange();
+	PAGTexture->PostEditChange();
 
-	return AnimTexture;
+	return PAGTexture;
 }

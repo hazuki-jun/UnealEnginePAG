@@ -4,7 +4,6 @@
 #include "PAGTexture2D.h"
 
 #include "PAGTextureResource.h"
-#include "Engine/DataTable.h"
 #include "pag/pag.h"
 
 namespace PAGTexture2D
@@ -333,7 +332,10 @@ void UPAGTexture2D::Finish()
 	
 	bFinished = true;
 	bIsPlaying = false;
+
+#if WITH_EDITOR
 	SetFrame(0);
+#endif
 
 #if WITH_EDITORONLY_DATA
 	bPlay = false;
@@ -346,10 +348,11 @@ void UPAGTexture2D::Finish()
 			OnFinished.Clear();
 		});
 	}
-
+#if !WITH_EDITOR
 	if (bAutoRelease)
 	{
 		Release();
 	}
+#endif
 }
 
