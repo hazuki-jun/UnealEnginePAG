@@ -1,5 +1,7 @@
 ﻿#include "PAGTextureResource.h"
 
+#include <pag/pag.h>
+
 #include "PAGTexture2D.h"
 #include "DeviceProfiles/DeviceProfile.h"
 #include "DeviceProfiles/DeviceProfileManager.h"
@@ -19,23 +21,27 @@ FPAGTextureResource::~FPAGTextureResource()
 
 uint32 FPAGTextureResource::GetSizeX() const
 {
-	return Owner ? Owner->ContentWidth : 0;
+	return Owner ? Owner->ContentWidth : 32;
 }
 
 uint32 FPAGTextureResource::GetSizeY() const
 {
-	return Owner ? Owner->ContentHeight : 0;
+	return Owner ? Owner->ContentHeight : 32;
 }
 
 void FPAGTextureResource::InitRHI()
 {
+	CreateSamplerStates(1);
 	auto CreationFlags = (Owner->SRGB ? TexCreate_SRGB : TexCreate_None)  | (Owner->bNotOfflineProcessed ? TexCreate_None : TexCreate_OfflineProcessed) | TexCreate_ShaderResource | (Owner->bNoTiling ? TexCreate_NoTiling : TexCreate_None);
 	
 	FRHIResourceCreateInfo CreateInfo(TEXT("PAGTexture2D"));
-	TextureRHI = RHICreateTexture2D(GetSizeX(), GetSizeY(), PF_B8G8R8A8, 1, 1, CreationFlags, CreateInfo);
+
+	const auto SizeX = GetSizeX();
+	const auto SizeY = GetSizeY();
+	TextureRHI = RHICreateTexture2D(SizeX, SizeY, PF_B8G8R8A8, 1, 1, CreationFlags, CreateInfo);
 	TextureRHI->SetName(Owner->GetFName());
 	RHIUpdateTextureReference(TextureReferenceRHI, TextureRHI);
-	CreateSamplerStates(1);
+	
 	CreateTexture();
 	Register();
 }
@@ -65,11 +71,17 @@ void FPAGTextureResource::Tick(float DeltaTime)
 		return;
 	}
 	
+	FScopeLock LockPlaying(&Owner->PlayingCS);
 	const float Duration = FApp::GetCurrentTime() - Owner->GetLastRenderTimeForStreaming();
 	if (Owner->IsPlaying() && Duration < 1.5f)
 	{
 		TickTexture(DeltaTime);
 	}
+}
+
+bool FPAGTextureResource::IsTickable() const
+{
+	return true;
 }
 
 void FPAGTextureResource::TickTexture(float DeltaTime)
@@ -100,9 +112,14 @@ void FPAGTextureResource::CreateTexture()
 
 void FPAGTextureResource::GetData(void* Dest, uint32 DestPitch)
 {
-	constexpr auto PixelFormat = PF_B8G8R8A8; 
 	Owner->ReadFrameData();
 
+	if (!Owner->FrameData)
+	{
+		return;
+	}
+	
+	constexpr auto PixelFormat = PF_B8G8R8A8; 
 	// for platforms that returned 0 pitch from Lock, we need to just use the bulk data directly, never do 
 	// runtime block size checking, conversion, or the like
 	if (DestPitch == 0)
@@ -120,7 +137,5 @@ void FPAGTextureResource::GetData(void* Dest, uint32 DestPitch)
 		// Copy the texture data.
 		CopyTextureData2D(Owner->FrameData, Dest, GetSizeY(), PixelFormat,SrcPitch,DestPitch);
 	}
-
-	// FrameData.Empty();
 }
 

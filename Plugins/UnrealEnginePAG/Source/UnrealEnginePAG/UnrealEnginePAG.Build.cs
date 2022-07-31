@@ -31,6 +31,16 @@ public class UnrealEnginePAG : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicAdditionalLibraries.Add(LibsDirectory + "pag.lib");
+
+			// string LibEGLDll = "libEGL.dll";
+			// string LibGLESv2 = "libGLESv2.dll";
+			
+			// PublicDelayLoadDLLs.Add(LibEGLDll);
+			// PublicDelayLoadDLLs.Add(LibGLESv2);
+			
+			RuntimeDependencies.Add("$(TargetOutputDir)/libEGL.dll", Path.Combine(PluginDirectory, "Binaries", "Win64", "libEGL.dll"));
+			RuntimeDependencies.Add("$(TargetOutputDir)/libGLESv2.dll", Path.Combine(PluginDirectory, "Binaries", "Win64", "libGLESv2.dll"));
+			
 			// AddEngineThirdPartyPrivateStaticDependencies(Target, "FreeType2");
 			// PublicAdditionalLibraries.Add(LibsDirectory + "libEGL.lib");
 			// PublicAdditionalLibraries.Add(LibsDirectory + "libGLESv2.lib");

@@ -4,6 +4,7 @@
 #include "PAGTexture2D.h"
 
 #include "PAGTextureResource.h"
+#include "Engine/DataTable.h"
 #include "pag/pag.h"
 
 namespace PAGTexture2D
@@ -49,7 +50,13 @@ UPAGTexture2D::UPAGTexture2D(const FObjectInitializer& ObjectInitializer) : Supe
 	PAGFile = nullptr;
 	PAGPlayer = nullptr;
 	PAGSurface = nullptr;
+	bIsPlaying = true;
+	bFinished = false;
+	bLoop = true;
 	LODGroup = TEXTUREGROUP_UI;
+	
+	ContentWidth = 0;
+	ContentHeight = 0;
 }
 
 float UPAGTexture2D::GetSurfaceWidth() const
@@ -69,7 +76,15 @@ FTextureResource* UPAGTexture2D::CreateResource()
 
 uint32 UPAGTexture2D::CalcTextureMemorySizeEnum(ETextureMipCount Enum) const
 {
-	return Super::CalcTextureMemorySizeEnum(Enum);
+	if(ContentHeight > 0 && ContentWidth > 0) 
+	{
+		auto Flags = (SRGB ? TexCreate_SRGB : TexCreate_None)  | (bNotOfflineProcessed ? TexCreate_None : TexCreate_OfflineProcessed) | TexCreate_ShaderResource | (bNoTiling ? TexCreate_NoTiling : TexCreate_None);
+		uint32 TextureAlign;
+		uint64 Size = RHICalcTexture2DPlatformSize(ContentWidth, ContentHeight, PF_B8G8R8A8, 1, 1, Flags, FRHIResourceCreateInfo(TEXT("PAGTexture2D")), TextureAlign);
+		return static_cast<uint32>(Size);
+	}
+
+	return 4;
 }
 
 #if WITH_EDITOR
@@ -77,11 +92,10 @@ void UPAGTexture2D::PostEditChangeProperty(FPropertyChangedEvent& PropertyChange
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
-	if (bIsPlaying != bPlayInEditor)
-	{
-		bIsPlaying = bPlayInEditor;
-	}
-
+	FScopeLock LockPlaying(&PlayingCS);
+	
+	bIsPlaying = bPlay;
+	
 	if (bIsPlaying && bFinished)
 	{
 		bFinished = false;
@@ -89,22 +103,34 @@ void UPAGTexture2D::PostEditChangeProperty(FPropertyChangedEvent& PropertyChange
 	}
 }
 #endif
+
 void UPAGTexture2D::GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize)
 {
 	Super::GetResourceSizeEx(CumulativeResourceSize);
+
+	if (!IsCurrentlyVirtualTextured())
+	{
+		CumulativeResourceSize.AddDedicatedSystemMemoryBytes(RawData.GetAllocatedSize());
+	}
 }
 
 void UPAGTexture2D::PostLoad()
 {
-	ParsePAG();
-	bPlayInEditor = false;
-	bFinished = false;
-	SetFrame(0);
+	if (LoadPAG())
+	{
+		SetFrame(0);
+	}
+
+#if WITH_EDITOR
+	bPlay = bIsPlaying;
+#endif
+	
 	Super::PostLoad();
 }
 
 void UPAGTexture2D::BeginDestroy()
 {
+	Stop();
 	Release();
 	Super::BeginDestroy();
 }
@@ -113,11 +139,16 @@ bool UPAGTexture2D::ImportPAG(const uint8* Buffer, uint32 BufferSize)
 {
 	RawData.SetNumUninitialized(BufferSize);
 	FMemory::Memcpy(RawData.GetData(), Buffer, BufferSize);
-	return ParsePAG();
+	return LoadPAG();
 }
 
-bool UPAGTexture2D::ParsePAG()
+bool UPAGTexture2D::LoadPAG()
 {
+	if (GIsCookerLoadingPackage)
+	{
+		return false;
+	}
+	
 	if (PAGFile == nullptr)
 	{
 		PAGFile = pag::PAGFile::Load(RawData.GetData(), RawData.Num());
@@ -125,44 +156,48 @@ bool UPAGTexture2D::ParsePAG()
 		{
 			return false;
 		}
-	
+		
 		ContentHeight = PAGFile->height();
 		ContentWidth = PAGFile->width();
 		TotalFrames = (int32)(TimeToFrame(PAGFile->duration(), PAGFile->frameRate()));
 		FrameRate = PAGFile->frameRate();
-		FrameData = new uint8[ContentHeight * ContentWidth * 4];
-		
+
 		if (PAGSurface == nullptr)
 		{
 			PAGSurface = pag::PAGSurface::MakeOffscreen(ContentWidth, ContentHeight);
+			
 			if (PAGSurface == nullptr)
 			{
 				return false;
+			}	
+
+			if (PAGPlayer == nullptr)
+			{
+				PAGPlayer = std::make_shared<pag::PAGPlayer>();
+				PAGPlayer->setComposition(PAGFile);
+				PAGPlayer->setSurface(PAGSurface);
+				SetProgress(0);
 			}
-		}
-	
-		if (PAGPlayer == nullptr)
-		{
-			PAGPlayer = std::make_shared<pag::PAGPlayer>();
-			PAGPlayer->setSurface(PAGSurface);
-			PAGPlayer->setComposition(PAGFile);
-	
-			SetProgress(0);
 		}
 	}
 	
 	return true;
 }
 
+
 void UPAGTexture2D::Release()
 {
-	OnFinished.Clear();
-	Finish();
-	Reset();
+	if (OnFinished.IsBound())
+	{
+		OnFinished.Clear();
+	}
+	
 	if (FrameData)
 	{
 		delete[] FrameData;
 	}
+	
+	Reset();
 }
 
 void UPAGTexture2D::SetFrame(int32 Frame)
@@ -186,7 +221,7 @@ void UPAGTexture2D::SetProgress(float Percent)
 {
 	if (Percent > 1.f)
 	{
-		if (bIsLoop)
+		if (bLoop)
 		{
 			SetFrame(0);
 		}
@@ -206,16 +241,19 @@ void UPAGTexture2D::SetProgress(float Percent)
 
 void UPAGTexture2D::Stop()
 {
+	FScopeLock LockPlaying(&PlayingCS);
 	bIsPlaying = false;
 }
 
 void UPAGTexture2D::Play()
 {
+	FScopeLock LockPlaying(&PlayingCS);
 	bIsPlaying = true;
 }
 
 void UPAGTexture2D::PlayFromStart()
 {
+	FScopeLock LockPlaying(&PlayingCS);
 	bIsPlaying = false;
 	bFinished = false;
 	SetFrame(0);
@@ -225,6 +263,25 @@ void UPAGTexture2D::PlayFromStart()
 float UPAGTexture2D::GetDuration() const
 {
 	return PAGPlayer ? PAGPlayer->duration() : 0.f;
+}
+
+bool UPAGTexture2D::SetText(const FString& InText, int32 TextIndex)
+{
+	if (PAGFile)
+	{
+		const auto TextNum = PAGFile->numTexts(); 
+		if (TextIndex >= 0 && TextIndex < TextNum)
+		{
+			if (auto TextDoc = PAGFile->getTextData(TextIndex))
+			{
+				TextDoc->text = TCHAR_TO_UTF8(*InText);
+				PAGFile->replaceText(TextIndex, TextDoc);
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 void UPAGTexture2D::ReadFrameData()
@@ -239,24 +296,32 @@ void UPAGTexture2D::ReadFrameData()
 		FrameData =  new uint8[ContentHeight * ContentWidth * 4];
 	}
 	
-	FMemory::Memzero(FrameData, ContentWidth * ContentHeight * 4);
 	if (PAGSurface)
 	{
+		FMemory::Memzero(FrameData, ContentWidth * ContentHeight * 4);
 		PAGSurface->readPixels(pag::ColorType::BGRA_8888, pag::AlphaType::Premultiplied, FrameData, PAGFile->width() * 4);
 	}
 }
 
 void UPAGTexture2D::Reset()
 {
-	Stop();
-	PAGFile.reset();
-	PAGFile = nullptr;
-	
-	PAGPlayer.reset();
-	PAGPlayer = nullptr;
-	
-	PAGSurface.reset();
-	PAGSurface = nullptr;
+	if (PAGFile)
+	{
+		PAGFile.reset();
+		PAGFile = nullptr;
+	}
+
+	if (PAGPlayer)
+	{
+		PAGPlayer.reset();
+		PAGPlayer = nullptr;
+	}
+
+	if (PAGSurface)
+	{
+		PAGSurface.reset();
+		PAGSurface = nullptr;
+	}
 }
 
 void UPAGTexture2D::Finish()
@@ -268,10 +333,23 @@ void UPAGTexture2D::Finish()
 	
 	bFinished = true;
 	bIsPlaying = false;
+	SetFrame(0);
 
-	AsyncTask(ENamedThreads::GameThread, [=]() {
-		OnFinished.Broadcast();
-		OnFinished.Clear();
-	});
+#if WITH_EDITORONLY_DATA
+	bPlay = false;
+#endif
+	
+	if (OnFinished.IsBound())
+	{
+		AsyncTask(ENamedThreads::GameThread, [=]() {
+			OnFinished.Broadcast();
+			OnFinished.Clear();
+		});
+	}
+
+	if (bAutoRelease)
+	{
+		Release();
+	}
 }
 

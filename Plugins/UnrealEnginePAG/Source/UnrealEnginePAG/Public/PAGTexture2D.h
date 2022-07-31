@@ -17,7 +17,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FPAGTextureDelegate);
 /**
  * 
  */
-UCLASS()
+UCLASS(BlueprintType, Category = PAGTexture2D, hideCategories = (Adjustments, Compression, LevelOfDetail, Compositing))
 class UNREALENGINEPAG_API UPAGTexture2D : public UTexture
 {
 	GENERATED_BODY()
@@ -47,11 +47,10 @@ public:
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif // WITH_EDITOR
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
-	
 	//~ End UObject Interface.
 	
 	bool ImportPAG(const uint8* Buffer, uint32 BufferSize);
-	bool ParsePAG();
+	bool LoadPAG();
 	void ReadFrameData();
 	void Reset();
 	
@@ -79,14 +78,18 @@ private:
 	
 	/** PAG property */
 public:
+	/* 播放/暂停 */
 	UPROPERTY(EditAnywhere, Category = "Editor")
-	bool bPlayInEditor = false;
-
+	bool bPlay = true;
+	
 	/** 设置循环 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PAG")
-	bool bIsLoop = false;
+	bool bLoop = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PAG")
+	bool bAutoRelease = true;
 protected:
+	/** 帧率 */
 	UPROPERTY(VisibleAnywhere, Category = "PAG")
 	float FrameRate = 0.f;
 
@@ -150,11 +153,22 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "PAGTexture2D")
 	float GetDuration() const;
+
+	/**
+	 * @brief 设置文本
+	 * @param InText
+	 * @param TextIndex
+	 * return true if success
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PAGTexture2D")
+	bool SetText(const FString& InText, int32 TextIndex = 0);
 	
 private:
-	bool bIsPlaying : 1;
+	bool bIsPlaying;
 	uint8* FrameData = nullptr;
 	int32 CurrentFrame = 0;
-	bool bFinished : 1;
+	bool bFinished;
+
+	mutable FCriticalSection PlayingCS;
 };
 
